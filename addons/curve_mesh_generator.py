@@ -316,7 +316,8 @@ def build_railing_mesh(name, points, height, num_posts, rail_segments, post_diam
         return _new_mesh(name)
     tang = axis.normalized()
     mat = _frame_from_tangent(tang)
-    up = mat @ Vector((0.0, 1.0, 0.0))
+    # 立柱方向：默认朝上（绕水平面翻转 180 度后取反，栏杆位于曲线上方）
+    up = -(mat @ Vector((0.0, 1.0, 0.0)))
 
     rail_segments = max(3, rail_segments)
     num_posts = max(2, num_posts)

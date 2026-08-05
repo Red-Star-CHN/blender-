@@ -1,7 +1,7 @@
 """Test railing layout: lower rail sits at mid-height of posts, upper rail stays at post top.
 
-Curve is horizontal (along X). v1.0 orientation: rails run along the curve,
-posts follow the curve-local up direction (which points -Z for a horizontal curve).
+Curve is horizontal (along X). Railing is flipped up: posts go upward from the curve,
+lower rail at +H/2, upper rail at +H.
 """
 
 import bpy
@@ -46,17 +46,20 @@ print(f"[LAYOUT] min_z={min_z:.4f} max_z={max_z:.4f} verts={len(zs)}")
 H = 1.2
 R = 0.04  # rail radius
 
-# Lower rail center must be at mid-height of the posts: -H/2
-lower_band = [z for z in zs if -(H / 2 + R) - 1e-4 < z < -(H / 2 - R) + 1e-4]
-assert lower_band, f"No vertices at lower rail mid-height band around -{H/2}: {zs}"
-print(f"[LAYOUT] lower rail at -{H/2:.2f} (mid of posts): {len(lower_band)} verts")
+# Railing must sit ABOVE the curve plane (flipped up)
+assert min_z > -1e-3, f"Railing should be above z=0, got min_z={min_z}"
 
-# Upper rail center must stay at the post top: -H
-upper_band = [z for z in zs if -(H + R) - 1e-4 < z < -(H - R) + 1e-4]
-assert upper_band, f"No vertices at upper rail band around -{H}"
-print(f"[LAYOUT] upper rail at -{H:.2f} (post top): {len(upper_band)} verts")
+# Lower rail center must be at mid-height of the posts: +H/2
+lower_band = [z for z in zs if (H / 2 - R) - 1e-4 < z < (H / 2 + R) + 1e-4]
+assert lower_band, f"No vertices at lower rail mid-height band around +{H/2}"
+print(f"[LAYOUT] lower rail at +{H/2:.2f} (mid of posts): {len(lower_band)} verts")
 
-# Posts span from curve plane (z=0) down to the top rail
-assert abs(max_z) < 1e-3, f"Posts should start at z=0, got max_z={max_z}"
+# Upper rail center must stay at the post top: +H
+upper_band = [z for z in zs if (H - R) - 1e-4 < z < (H + R) + 1e-4]
+assert upper_band, f"No vertices at upper rail band around +{H}"
+print(f"[LAYOUT] upper rail at +{H:.2f} (post top): {len(upper_band)} verts")
+
+# Posts span from curve plane (z=0) up to the top rail
+assert abs(min_z) < 1e-3, f"Posts should start at z=0, got min_z={min_z}"
 print("[LAYOUT] PASSED")
 bpy.ops.wm.quit_blender()

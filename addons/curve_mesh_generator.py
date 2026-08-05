@@ -309,35 +309,42 @@ def build_ladder_mesh(name, points, width, rung_segments, num_rungs, side_diamet
 
 
 def build_railing_mesh(name, points, height, num_posts, rail_segments, post_diameter, rail_diameter):
-    """水平栏杆：横杆沿曲线的水平投影方向延伸，立柱竖直向上。"""
-    if not points:
+    """栏杆沿曲线方向生成：上下横杆 + 立柱；下横杆位于立柱中央，上横杆位于柱顶。"""
+    start, end = points[0], points[-1]
+    axis = end - start
+    if axis.length < 1e-9:
         return _new_mesh(name)
+    tang = axis.normalized()
+    mat = _frame_from_tangent(tang)
+    up = mat @ Vector((0.0, 1.0, 0.0))
 
-    ground_z = points[0].z
-    flat = [Vector((p.x, p.y, ground_z)) for p in points]
-    flat_len = 0.0
-    for i in range(1, len(flat)):
-        flat_len += (flat[i] - flat[i - 1]).length
-    if flat_len < 1e-9:
-        # 曲线竖直时水平投影退化为点：沿水平 X 轴延伸（长度取曲线原长）
-        length = (points[-1] - points[0]).length
-        if length < 1e-9:
-            return _new_mesh(name)
-        flat = [flat[0], flat[0] + Vector((length, 0.0, 0.0))]
-
+    rail_segments = max(3, rail_segments)
     num_posts = max(2, num_posts)
-    up = Vector((0.0, 0.0, 1.0))
 
     all_verts = []
     all_faces = []
 
-    top_path = [p + up * height for p in flat]
-    _append_swept_cylinder(all_verts, all_faces, flat, rail_diameter / 2, rail_segments)
-    _append_swept_cylinder(all_verts, all_faces, top_path, rail_diameter / 2, rail_segments)
+    up_offset = up * height
+    mid_offset = up * (height / 2)
 
-    post_centers = resample_points(flat, num_posts)
-    for pc in post_centers:
-        v, f = _cylinder_between(pc, pc + up * height, post_diameter / 2, rail_segments)
+    # 底部横杆：位于立柱中央
+    v, f = _cylinder_between(start + mid_offset, end + mid_offset, rail_diameter / 2, rail_segments)
+    base = len(all_verts)
+    all_verts.extend(v)
+    all_faces.extend([tuple(vi + base for vi in face) for face in f])
+
+    # 顶部横杆：位于柱顶（保持不动）
+    v, f = _cylinder_between(start + up_offset, end + up_offset, rail_diameter / 2, rail_segments)
+    base = len(all_verts)
+    all_verts.extend(v)
+    all_faces.extend([tuple(vi + base for vi in face) for face in f])
+
+    # 立柱：从曲线处到柱顶
+    for i in range(num_posts):
+        factor = i / (num_posts - 1) if num_posts > 1 else 0.0
+        p1 = start.lerp(end, factor)
+        p2 = p1 + up_offset
+        v, f = _cylinder_between(p1, p2, post_diameter / 2, rail_segments)
         base = len(all_verts)
         all_verts.extend(v)
         all_faces.extend([tuple(vi + base for vi in face) for face in f])

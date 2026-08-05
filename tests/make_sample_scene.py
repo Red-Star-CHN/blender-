@@ -73,10 +73,10 @@ def main():
     props.bevel_enabled = False
     bpy.ops.mesh.cmg_generate()
 
-    # Curve 3: straight line -> Railing
+    # Curve 3: horizontal line -> Railing
     c3 = make_curve(
         "SampleCurve_Railing", (16, 0, 0),
-        [(0, 0, 0), (0, 0, 6)],
+        [(0, 0, 0), (6, 0, 0)],
     )
     activate(c3)
     props.gen_type = "RAILING"

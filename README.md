@@ -65,4 +65,6 @@ blender-
 
 ## 许可
 
-保留权利（私有仓库）。
+本项目采用 **GNU Lesser General Public License v3.0 (LGPL-3.0)**。
+
+详见 [LICENSE](LICENSE)（许可证正文另见 [COPYING.LESSER](COPYING.LESSER)）。

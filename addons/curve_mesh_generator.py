@@ -1,10 +1,10 @@
 bl_info = {
-    "name": "Curve Mesh Generator",
+    "name": "曲线网格生成器",
     "author": "Red-Star-CHN",
-    "version": (1, 0, 0),
+    "version": (1, 1, 0),
     "blender": (4, 0, 0),
-    "location": "View3D > Sidebar > Curve Mesh",
-    "description": "Generate pipe, ladder and railing meshes from curves. Editable segments/faces and bevel.",
+    "location": "3D 视图 > 侧边栏 > 曲线网格",
+    "description": "根据曲线生成管道、梯子和栏杆网格，可编辑分段与面数，支持倒角操作。",
     "warning": "",
     "doc_url": "",
     "category": "Mesh",
@@ -21,7 +21,7 @@ CMG_TYPE_RAILING = "RAILING"
 PROP_PREFIX = "cmg_"
 
 # ---------------------------------------------------------------------------
-# Helpers
+# 通用工具
 # ---------------------------------------------------------------------------
 
 
@@ -33,7 +33,7 @@ def ensure_selected_curve(context):
 
 
 def _sample_spline_points(spline, per_seg=8):
-    """Sample local-space points along one spline (POLY or BEZIER)."""
+    """沿一条样条（POLY 或 BEZIER）采样局部坐标点。"""
     pts = []
     if spline.type == "POLY":
         n = len(spline.points)
@@ -64,7 +64,7 @@ def _sample_spline_points(spline, per_seg=8):
 
 
 def sample_curve_points(obj, num_points):
-    """Sample world-space points and tangents along a curve object."""
+    """采样曲线对象的世界坐标点与切线方向。"""
     if num_points < 2:
         num_points = 2
     raw = []
@@ -90,53 +90,8 @@ def sample_curve_points(obj, num_points):
     return points, tangents
 
 
-def _frame_from_tangent(tang):
-    """Build a 3x3 rotation matrix whose local Z axis aligns with the tangent."""
-    t = tang.normalized()
-    ref = Vector((0.0, 0.0, 1.0)) if abs(t.dot(Vector((0.0, 0.0, 1.0)))) < 0.99 else Vector((1.0, 0.0, 0.0))
-    x = t.cross(ref)
-    if x.length_squared < 1e-12:
-        x = Vector((1.0, 0.0, 0.0))
-    else:
-        x.normalize()
-    y = t.cross(x)
-    return Matrix((x, y, t)).transposed()
-
-
-def _new_mesh(name):
-    return bpy.data.meshes.new(name)
-
-
-def _assign_object(context, mesh, name):
-    obj = bpy.data.objects.new(name, mesh)
-    context.collection.objects.link(obj)
-    return obj
-
-
-def _cylinder_between(p1, p2, radius, segments, radius2=None):
-    """Return (verts, faces) of an open (optionally tapered) cylinder between p1 and p2."""
-    axis = p2 - p1
-    length = axis.length
-    if length < 1e-9:
-        return [], []
-    tang = axis.normalized()
-    mat = _frame_from_tangent(tang)
-    r2 = radius if radius2 is None else radius2
-    verts = []
-    for k, center, rad in ((0, p1, radius), (1, p2, r2)):
-        for j in range(segments):
-            angle = (j / segments) * math.tau
-            local = Vector((math.cos(angle) * rad, math.sin(angle) * rad, 0.0))
-            verts.append(mat @ local + center)
-    faces = []
-    for j in range(segments):
-        j1 = (j + 1) % segments
-        faces.append((j, j1, segments + j1, segments + j))
-    return verts, faces
-
-
 def resample_points(points, num):
-    """Resample a polyline into `num` evenly spaced points (chord length)."""
+    """按弦长将折线均匀重采样为 num 个点。"""
     if num < 2:
         num = 2
     if len(points) < 2:
@@ -162,6 +117,82 @@ def resample_points(points, num):
     return out
 
 
+def _frame_from_tangent(tang):
+    """构建一个局部 Z 轴与切线对齐的旋转矩阵。"""
+    t = tang.normalized()
+    ref = Vector((0.0, 0.0, 1.0)) if abs(t.dot(Vector((0.0, 0.0, 1.0)))) < 0.99 else Vector((1.0, 0.0, 0.0))
+    x = t.cross(ref)
+    if x.length_squared < 1e-12:
+        x = Vector((1.0, 0.0, 0.0))
+    else:
+        x.normalize()
+    y = t.cross(x)
+    return Matrix((x, y, t)).transposed()
+
+
+def _new_mesh(name):
+    return bpy.data.meshes.new(name)
+
+
+def _assign_object(context, mesh, name):
+    obj = bpy.data.objects.new(name, mesh)
+    context.collection.objects.link(obj)
+    return obj
+
+
+def _cylinder_between(p1, p2, radius, segments, radius2=None):
+    """返回两点间（可选锥形）圆柱的 (顶点, 面) 列表。"""
+    axis = p2 - p1
+    length = axis.length
+    if length < 1e-9:
+        return [], []
+    tang = axis.normalized()
+    mat = _frame_from_tangent(tang)
+    r2 = radius if radius2 is None else radius2
+    verts = []
+    for k, center, rad in ((0, p1, radius), (1, p2, r2)):
+        for j in range(segments):
+            angle = (j / segments) * math.tau
+            local = Vector((math.cos(angle) * rad, math.sin(angle) * rad, 0.0))
+            verts.append(mat @ local + center)
+    faces = []
+    for j in range(segments):
+        j1 = (j + 1) % segments
+        faces.append((j, j1, segments + j1, segments + j))
+    return verts, faces
+
+
+def _append_swept_cylinder(all_verts, all_faces, path, radius, segments):
+    """沿折线路径扫掠开口圆柱，追加到顶点/面列表。"""
+    segments = max(3, segments)
+    path = resample_points(path, max(len(path), 2))
+    base = len(all_verts)
+    tangents = []
+    for i in range(len(path)):
+        if i == 0:
+            t = path[1] - path[0]
+        elif i == len(path) - 1:
+            t = path[-1] - path[-2]
+        else:
+            t = path[i + 1] - path[i - 1]
+        tangents.append(t.normalized() if t.length > 1e-9 else Vector((0, 0, 1)))
+    for i, loc in enumerate(path):
+        mat = _frame_from_tangent(tangents[i])
+        for j in range(segments):
+            angle = (j / segments) * math.tau
+            local = Vector((math.cos(angle) * radius, math.sin(angle) * radius, 0.0))
+            all_verts.append(mat @ local + loc)
+    for i in range(len(path) - 1):
+        off = i * segments
+        for j in range(segments):
+            j1 = (j + 1) % segments
+            all_faces.append(
+                (base + off + j, base + off + j1,
+                 base + off + segments + j1, base + off + segments + j)
+            )
+    return base
+
+
 def store_props(obj, props):
     for key, value in props.items():
         obj[PROP_PREFIX + key] = value
@@ -181,7 +212,7 @@ def owns_prop(obj, key):
     return PROP_PREFIX + key in obj
 
 
-# Panel property keys and their defaults, used to sync stored values back to the panel.
+# 面板属性键与默认值，用于将存储值同步回面板。
 SYNC_DEFAULTS = {
     "pipe_radius": 0.1,
     "pipe_ring_segments": 12,
@@ -203,7 +234,7 @@ SYNC_DEFAULTS = {
 
 
 def sync_props_from_object(props, obj):
-    """Copy stored object parameters into the scene panel properties."""
+    """将选中物体存储的参数复制到面板属性。"""
     stored = read_props(obj)
     for key, default in SYNC_DEFAULTS.items():
         value = stored.get(key, default)
@@ -217,49 +248,28 @@ def sync_props_from_object(props, obj):
 
 
 # ---------------------------------------------------------------------------
-# Mesh builders
+# 网格构建
 # ---------------------------------------------------------------------------
 
 
 def build_pipe_mesh(name, points, radius, ring_segments, length_segments):
-    """Hollow cylinder swept along the sampled curve path."""
+    """沿采样曲线路径扫掠的中空圆柱（管道）。"""
     ring_segments = max(3, ring_segments)
     length_segments = max(2, length_segments)
     path = resample_points(points, length_segments + 1)
 
-    verts = []
-    tangents = []
-    for i in range(len(path)):
-        if i == 0:
-            t = path[1] - path[0]
-        elif i == len(path) - 1:
-            t = path[-1] - path[-2]
-        else:
-            t = path[i + 1] - path[i - 1]
-        tangents.append(t.normalized() if t.length > 1e-9 else Vector((0, 0, 1)))
-
-    for i, loc in enumerate(path):
-        mat = _frame_from_tangent(tangents[i])
-        for j in range(ring_segments):
-            angle = (j / ring_segments) * math.tau
-            local = Vector((math.cos(angle) * radius, math.sin(angle) * radius, 0.0))
-            verts.append(mat @ local + loc)
-
-    faces = []
-    for i in range(length_segments):
-        base = i * ring_segments
-        for j in range(ring_segments):
-            j1 = (j + 1) % ring_segments
-            faces.append((base + j, base + j1, base + ring_segments + j1, base + ring_segments + j))
+    all_verts = []
+    all_faces = []
+    _append_swept_cylinder(all_verts, all_faces, path, radius, ring_segments)
 
     mesh = _new_mesh(name)
-    mesh.from_pydata(verts, [], faces)
+    mesh.from_pydata(all_verts, [], all_faces)
     mesh.update()
     return mesh
 
 
 def build_ladder_mesh(name, points, width, rung_segments, num_rungs, side_diameter, rung_diameter):
-    """Ladder along the curve direction: two side rails + evenly spaced rungs."""
+    """沿曲线方向生成梯子：两根纵梁 + 等距横档。"""
     start, end = points[0], points[-1]
     axis = end - start
     if axis.length < 1e-9:
@@ -299,33 +309,35 @@ def build_ladder_mesh(name, points, width, rung_segments, num_rungs, side_diamet
 
 
 def build_railing_mesh(name, points, height, num_posts, rail_segments, post_diameter, rail_diameter):
-    """Railing along the curve: top+bottom rails, vertical posts."""
-    start, end = points[0], points[-1]
-    axis = end - start
-    if axis.length < 1e-9:
+    """水平栏杆：横杆沿曲线的水平投影方向延伸，立柱竖直向上。"""
+    if not points:
         return _new_mesh(name)
-    tang = axis.normalized()
-    mat = _frame_from_tangent(tang)
-    up = mat @ Vector((0.0, 1.0, 0.0))
 
-    rail_segments = max(3, rail_segments)
+    ground_z = points[0].z
+    flat = [Vector((p.x, p.y, ground_z)) for p in points]
+    flat_len = 0.0
+    for i in range(1, len(flat)):
+        flat_len += (flat[i] - flat[i - 1]).length
+    if flat_len < 1e-9:
+        # 曲线竖直时水平投影退化为点：沿水平 X 轴延伸（长度取曲线原长）
+        length = (points[-1] - points[0]).length
+        if length < 1e-9:
+            return _new_mesh(name)
+        flat = [flat[0], flat[0] + Vector((length, 0.0, 0.0))]
+
     num_posts = max(2, num_posts)
+    up = Vector((0.0, 0.0, 1.0))
 
     all_verts = []
     all_faces = []
 
-    up_offset = up * height
-    for p1, p2 in ((start, end), (start + up_offset, end + up_offset)):
-        v, f = _cylinder_between(p1, p2, rail_diameter / 2, rail_segments)
-        base = len(all_verts)
-        all_verts.extend(v)
-        all_faces.extend([tuple(vi + base for vi in face) for face in f])
+    top_path = [p + up * height for p in flat]
+    _append_swept_cylinder(all_verts, all_faces, flat, rail_diameter / 2, rail_segments)
+    _append_swept_cylinder(all_verts, all_faces, top_path, rail_diameter / 2, rail_segments)
 
-    for i in range(num_posts):
-        factor = i / (num_posts - 1) if num_posts > 1 else 0.0
-        p1 = start.lerp(end, factor)
-        p2 = p1 + up_offset
-        v, f = _cylinder_between(p1, p2, post_diameter / 2, rail_segments)
+    post_centers = resample_points(flat, num_posts)
+    for pc in post_centers:
+        v, f = _cylinder_between(pc, pc + up * height, post_diameter / 2, rail_segments)
         base = len(all_verts)
         all_verts.extend(v)
         all_faces.extend([tuple(vi + base for vi in face) for face in f])
@@ -337,76 +349,74 @@ def build_railing_mesh(name, points, height, num_posts, rail_segments, post_diam
 
 
 # ---------------------------------------------------------------------------
-# Property group
+# 属性组
 # ---------------------------------------------------------------------------
 
 
 class CMGProperties(bpy.types.PropertyGroup):
     gen_type: bpy.props.EnumProperty(
-        name="Type",
-        description="Mesh type to generate from the curve",
+        name="生成类型",
+        description="由曲线生成的网格类型",
         items=[
-            (CMG_TYPE_PIPE, "Pipe", "Generate a pipe (hollow cylinder) along the curve"),
-            (CMG_TYPE_LADDER, "Ladder", "Generate a ladder along the curve"),
-            (CMG_TYPE_RAILING, "Railing", "Generate a railing/fence along the curve"),
+            (CMG_TYPE_PIPE, "管道", "生成沿曲线的中空圆柱管道"),
+            (CMG_TYPE_LADDER, "梯子", "沿曲线方向生成梯子（纵梁 + 横档）"),
+            (CMG_TYPE_RAILING, "栏杆", "生成水平栏杆（横杆水平延伸、立柱竖直）"),
         ],
         default=CMG_TYPE_PIPE,
     )
 
     pipe_radius: bpy.props.FloatProperty(
-        name="Radius", default=0.1, min=0.001, max=10.0, unit="LENGTH")
+        name="半径", description="管道的半径", default=0.1, min=0.001, max=10.0, unit="LENGTH")
     pipe_ring_segments: bpy.props.IntProperty(
-        name="Ring Segments", description="Number of faces around the pipe",
-        default=12, min=3, max=256)
+        name="环面数", description="管道圆周上的面数", default=12, min=3, max=256)
     pipe_length_segments: bpy.props.IntProperty(
-        name="Length Segments", description="Segments along the pipe",
-        default=32, min=2, max=4096)
+        name="纵向分段", description="沿管道长度方向的分段数", default=32, min=2, max=4096)
 
     ladder_width: bpy.props.FloatProperty(
-        name="Width", default=0.5, min=0.01, max=10.0, unit="LENGTH")
+        name="宽度", description="梯子的宽度", default=0.5, min=0.01, max=10.0, unit="LENGTH")
     ladder_num_rungs: bpy.props.IntProperty(
-        name="Rungs", default=8, min=1, max=1024)
+        name="横档数量", description="梯子横档的根数", default=8, min=1, max=1024)
     ladder_side_diameter: bpy.props.FloatProperty(
-        name="Side Rail Dia.", default=0.08, min=0.001, max=1.0, unit="LENGTH")
+        name="纵梁直径", description="两侧纵梁的直径", default=0.08, min=0.001, max=1.0, unit="LENGTH")
     ladder_rung_diameter: bpy.props.FloatProperty(
-        name="Rung Dia.", default=0.06, min=0.001, max=1.0, unit="LENGTH")
+        name="横档直径", description="横档的直径", default=0.06, min=0.001, max=1.0, unit="LENGTH")
     ladder_rung_segments: bpy.props.IntProperty(
-        name="Rung Faces", default=8, min=3, max=256)
+        name="横档面数", description="横档圆周上的面数", default=8, min=3, max=256)
 
     railing_height: bpy.props.FloatProperty(
-        name="Height", default=1.0, min=0.01, max=50.0, unit="LENGTH")
+        name="高度", description="栏杆的高度（立柱长度）", default=1.0, min=0.01, max=50.0, unit="LENGTH")
     railing_num_posts: bpy.props.IntProperty(
-        name="Posts", default=6, min=2, max=1024)
+        name="立柱数量", description="栏杆立柱的根数", default=6, min=2, max=1024)
     railing_post_diameter: bpy.props.FloatProperty(
-        name="Post Dia.", default=0.1, min=0.001, max=1.0, unit="LENGTH")
+        name="立柱直径", description="立柱的直径", default=0.1, min=0.001, max=1.0, unit="LENGTH")
     railing_rail_diameter: bpy.props.FloatProperty(
-        name="Rail Dia.", default=0.08, min=0.001, max=1.0, unit="LENGTH")
+        name="横杆直径", description="上下横杆的直径", default=0.08, min=0.001, max=1.0, unit="LENGTH")
     railing_rail_segments: bpy.props.IntProperty(
-        name="Rail Faces", default=8, min=3, max=256)
+        name="横杆面数", description="横杆圆周上的面数", default=8, min=3, max=256)
 
-    bevel_enabled: bpy.props.BoolProperty(name="Enable Bevel", default=True)
+    bevel_enabled: bpy.props.BoolProperty(
+        name="启用倒角", description="是否为生成物体添加倒角修改器", default=True)
     bevel_width: bpy.props.FloatProperty(
-        name="Bevel Width", default=0.005, min=0.0, max=1.0, unit="LENGTH")
+        name="倒角宽度", description="倒角的宽度", default=0.005, min=0.0, max=1.0, unit="LENGTH")
     bevel_segments: bpy.props.IntProperty(
-        name="Bevel Segments", default=2, min=1, max=64)
+        name="倒角分段", description="倒角的细分段数", default=2, min=1, max=64)
 
     target_name: bpy.props.StringProperty(
-        name="Object Name", default="Generated", maxlen=63)
+        name="物体名称", description="生成物体的名称", default="Generated", maxlen=63)
 
     last_active: bpy.props.StringProperty(
-        name="Last Active", description="Internal: last object synced into the panel",
-        default="")
+        name="上次选中物体", description="内部使用：已同步到面板的物体", default="")
 
 
 # ---------------------------------------------------------------------------
-# Operators
+# 操作符
 # ---------------------------------------------------------------------------
 
 
 class MESH_OT_cmg_generate(bpy.types.Operator):
     bl_idname = "mesh.cmg_generate"
-    bl_label = "Generate"
-    bl_description = "Generate the selected mesh type from the active curve"
+    bl_label = "生成"
+    bl_description = "根据当前曲线生成所选类型的网格物体"
     bl_options = {"REGISTER", "UNDO"}
 
     @classmethod
@@ -416,7 +426,7 @@ class MESH_OT_cmg_generate(bpy.types.Operator):
     def execute(self, context):
         curve = ensure_selected_curve(context)
         if curve is None:
-            self.report({"ERROR"}, "Select a curve object first")
+            self.report({"ERROR"}, "请先选择一条曲线")
             return {"CANCELLED"}
 
         props = context.scene.cmg_props
@@ -435,7 +445,7 @@ class MESH_OT_cmg_generate(bpy.types.Operator):
                 props.ladder_num_rungs, props.ladder_side_diameter, props.ladder_rung_diameter,
             )
         else:
-            points, _ = sample_curve_points(curve, 2)
+            points, _ = sample_curve_points(curve, 16)
             mesh = build_railing_mesh(
                 name, points, props.railing_height, props.railing_num_posts,
                 props.railing_rail_segments, props.railing_post_diameter, props.railing_rail_diameter,
@@ -473,14 +483,15 @@ class MESH_OT_cmg_generate(bpy.types.Operator):
         obj.select_set(True)
         curve.select_set(False)
 
-        self.report({"INFO"}, "{} generated".format(props.gen_type.title()))
+        type_names = {"PIPE": "管道", "LADDER": "梯子", "RAILING": "栏杆"}
+        self.report({"INFO"}, "{}已生成".format(type_names.get(props.gen_type, props.gen_type)))
         return {"FINISHED"}
 
 
 class MESH_OT_cmg_update(bpy.types.Operator):
     bl_idname = "mesh.cmg_update"
-    bl_label = "Update Selected"
-    bl_description = "Regenerate the selected mesh from the scene curve using current panel values"
+    bl_label = "更新选中物体"
+    bl_description = "使用面板当前参数重建选中的物体"
     bl_options = {"REGISTER", "UNDO"}
 
     @classmethod
@@ -491,7 +502,7 @@ class MESH_OT_cmg_update(bpy.types.Operator):
     def execute(self, context):
         obj = context.active_object
         if obj is None or obj.type != "MESH" or not owns_prop(obj, "gen_type"):
-            self.report({"ERROR"}, "Select a generated mesh object")
+            self.report({"ERROR"}, "请选择由本插件生成的网格物体")
             return {"CANCELLED"}
 
         props = context.scene.cmg_props
@@ -504,7 +515,7 @@ class MESH_OT_cmg_update(bpy.types.Operator):
                 curve = src
                 break
         if curve is None:
-            self.report({"ERROR"}, "No curve found to regenerate from")
+            self.report({"ERROR"}, "场景中未找到用于重建的曲线")
             return {"CANCELLED"}
 
         if gen_type == CMG_TYPE_PIPE:
@@ -527,7 +538,7 @@ class MESH_OT_cmg_update(bpy.types.Operator):
             post_d = float(props.railing_post_diameter)
             rail_d = float(props.railing_rail_diameter)
             rail_seg = int(props.railing_rail_segments)
-            points, _ = sample_curve_points(curve, 2)
+            points, _ = sample_curve_points(curve, 16)
             mesh = build_railing_mesh(obj.name, points, height, posts, rail_seg, post_d, rail_d)
 
         old_data = obj.data
@@ -572,21 +583,23 @@ class MESH_OT_cmg_update(bpy.types.Operator):
             "bevel_segments": bevel_segments,
         })
 
-        self.report({"INFO"}, "{} updated".format(gen_type.title()))
+        type_names = {"PIPE": "管道", "LADDER": "梯子", "RAILING": "栏杆"}
+        self.report({"INFO"}, "{}已更新".format(type_names.get(gen_type, gen_type)))
         return {"FINISHED"}
 
 
 # ---------------------------------------------------------------------------
-# Panel
+# 面板
 # ---------------------------------------------------------------------------
 
 
 class VIEW3D_PT_cmg(bpy.types.Panel):
-    bl_label = "Curve Mesh"
+    bl_label = "曲线网格生成器"
     bl_idname = "VIEW3D_PT_cmg"
     bl_space_type = "VIEW_3D"
     bl_region_type = "UI"
-    bl_category = "Curve Mesh"
+    bl_category = "曲线网格"
+    bl_options = {"DEFAULT_CLOSED"}
 
     def draw(self, context):
         layout = self.layout
@@ -598,42 +611,46 @@ class VIEW3D_PT_cmg(bpy.types.Panel):
             if props.last_active != obj.name:
                 sync_props_from_object(props, obj)
                 props.last_active = obj.name
-            layout.label(text="Loaded: " + obj.name, icon="MESH_DATA")
+            row = layout.row()
+            row.label(text="已加载参数：", icon="MESH_DATA")
+            row.label(text=obj.name)
         elif curve is not None:
-            layout.label(text="Curve: " + curve.name, icon="CURVE_DATA")
+            row = layout.row()
+            row.label(text="曲线：", icon="CURVE_DATA")
+            row.label(text=curve.name)
         else:
-            layout.label(text="Select a curve", icon="INFO")
+            layout.label(text="请先选择一条曲线", icon="INFO")
 
         layout.prop(props, "gen_type")
 
         if props.gen_type == CMG_TYPE_PIPE:
             box = layout.box()
-            box.label(text="Pipe", icon="MESH_CYLINDER")
+            box.label(text="管道参数", icon="MESH_CYLINDER")
             col = box.column(align=True)
             col.prop(props, "pipe_radius")
-            col.prop(props, "pipe_ring_segments", text="Ring Segments")
-            col.prop(props, "pipe_length_segments", text="Length Segments")
+            col.prop(props, "pipe_ring_segments", text="环面数（圆周分段）")
+            col.prop(props, "pipe_length_segments", text="纵向分段")
         elif props.gen_type == CMG_TYPE_LADDER:
             box = layout.box()
-            box.label(text="Ladder", icon="MESH_CYLINDER")
+            box.label(text="梯子参数", icon="MESH_CYLINDER")
             col = box.column(align=True)
             col.prop(props, "ladder_width")
-            col.prop(props, "ladder_num_rungs", text="Rungs")
+            col.prop(props, "ladder_num_rungs", text="横档数量")
             col.prop(props, "ladder_side_diameter")
             col.prop(props, "ladder_rung_diameter")
-            col.prop(props, "ladder_rung_segments", text="Rung Faces")
+            col.prop(props, "ladder_rung_segments", text="横档面数")
         else:
             box = layout.box()
-            box.label(text="Railing", icon="MESH_CYLINDER")
+            box.label(text="栏杆参数", icon="MESH_CYLINDER")
             col = box.column(align=True)
             col.prop(props, "railing_height")
-            col.prop(props, "railing_num_posts", text="Posts")
+            col.prop(props, "railing_num_posts", text="立柱数量")
             col.prop(props, "railing_post_diameter")
             col.prop(props, "railing_rail_diameter")
-            col.prop(props, "railing_rail_segments", text="Rail Faces")
+            col.prop(props, "railing_rail_segments", text="横杆面数")
 
         bevel_box = layout.box()
-        bevel_box.label(text="Bevel", icon="MOD_BEVEL")
+        bevel_box.label(text="倒角", icon="MOD_BEVEL")
         bevel_box.prop(props, "bevel_enabled")
         col = bevel_box.column(align=True)
         col.enabled = props.bevel_enabled
@@ -647,8 +664,11 @@ class VIEW3D_PT_cmg(bpy.types.Panel):
         if obj is not None and obj.type == "MESH" and owns_prop(obj, "gen_type"):
             layout.separator()
             stored = read_props(obj)
-            layout.label(text="Selected: " + obj.name, icon="MESH_DATA")
-            layout.label(text="Stored type: " + stored.get("gen_type", "?").title())
+            type_names = {"PIPE": "管道", "LADDER": "梯子", "RAILING": "栏杆"}
+            row = layout.row()
+            row.label(text="选中物体：", icon="MESH_DATA")
+            row.label(text=obj.name)
+            layout.label(text="类型：" + type_names.get(stored.get("gen_type", ""), "未知"))
             layout.operator("mesh.cmg_update", icon="FILE_REFRESH")
 
 

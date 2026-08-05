@@ -49,6 +49,8 @@ def run_test():
     assert verts == expected_verts, f"Pipe verts {verts} != {expected_verts}"
     assert faces == expected_faces, f"Pipe faces {faces} != {expected_faces}"
     assert pipe.get("cmg_gen_type") == "PIPE", "Pipe props not stored"
+    assert pipe.cmg_source_curve == curve_obj, "Pipe source curve not linked"
+    assert pipe.get("cmg_source_curve_name") == curve_obj.name, "Pipe source curve name not stored"
 
     # 4. Generate ladder
     bpy.context.view_layer.objects.active = curve_obj
@@ -104,6 +106,48 @@ def run_test():
     bevel = next(m for m in pipe.modifiers if m.type == "BEVEL")
     print(f"[TEST] Bevel: width={bevel.width}, segments={bevel.segments}")
     assert abs(bevel.width - 0.02) < 1e-6 and bevel.segments == 4
+
+    # 8. Source curve binding with multiple curves
+    second_curve_data = bpy.data.curves.new("SecondCurve", "CURVE")
+    second_curve_data.dimensions = "3D"
+    second_spline = second_curve_data.splines.new("POLY")
+    second_spline.points.add(1)
+    second_spline.points[0].co = (20, 0, 0, 1)
+    second_spline.points[1].co = (24, 0, 0, 1)
+    second_curve = bpy.data.objects.new("SecondCurve", second_curve_data)
+    bpy.context.collection.objects.link(second_curve)
+
+    for o in bpy.context.scene.objects:
+        o.select_set(False)
+    second_curve.select_set(True)
+    bpy.context.view_layer.objects.active = second_curve
+
+    props.gen_type = "PIPE"
+    props.pipe_ring_segments = 8
+    props.pipe_length_segments = 12
+    props.target_name = "SecondPipe"
+    bpy.ops.mesh.cmg_generate()
+
+    second_pipe = bpy.data.objects.get("SecondPipe")
+    assert second_pipe is not None, "Second pipe not created"
+    assert second_pipe.cmg_source_curve == second_curve, "Second pipe source curve not linked"
+
+    # Renaming the curve must not break the pointer-based relationship.
+    second_curve.name = "SecondCurveRenamed"
+    props.pipe_length_segments = 6
+    result = bpy.ops.mesh.cmg_update()
+    assert result == {"FINISHED"}, f"Second pipe update failed: {result}"
+    assert second_pipe.cmg_source_curve == second_curve, "Source curve pointer lost after rename"
+    assert second_pipe.get("cmg_source_curve_name") == second_curve.name, "Stored source name not refreshed"
+    xs = [vertex.co.x for vertex in second_pipe.data.vertices]
+    assert min(xs) > 19.0 and max(xs) < 25.0, "Second pipe rebuilt from the wrong curve"
+
+    # Legacy objects without a binding must not silently use the first curve
+    # when multiple candidates exist.
+    second_pipe.cmg_source_curve = None
+    del second_pipe["cmg_source_curve_name"]
+    result = bpy.ops.mesh.cmg_update()
+    assert result == {"CANCELLED"}, "Ambiguous legacy source curve should cancel update"
 
     print("[TEST] ALL TESTS PASSED")
 

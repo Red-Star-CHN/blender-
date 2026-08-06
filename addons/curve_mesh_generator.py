@@ -1,7 +1,7 @@
 bl_info = {
     "name": "曲线网格生成器",
     "author": "Red-Star-CHN",
-    "version": (1, 1, 0),
+    "version": (1, 1, 1),
     "blender": (4, 0, 0),
     "location": "3D 视图 > 侧边栏 > 曲线网格",
     "description": "根据曲线生成管道、梯子和栏杆网格，可编辑分段与面数，支持倒角操作。",
@@ -30,6 +30,11 @@ def ensure_selected_curve(context):
     if obj is None or obj.type != "CURVE":
         return None
     return obj
+
+
+def source_curve_poll(_self, obj):
+    """限制来源对象选择器只接受曲线对象。"""
+    return obj is not None and obj.type == "CURVE"
 
 
 def _sample_spline_points(spline, per_seg=8):
@@ -210,6 +215,28 @@ def read_props(obj):
 
 def owns_prop(obj, key):
     return PROP_PREFIX + key in obj
+
+
+def resolve_source_curve(context, obj):
+    """解析生成物体对应的来源曲线，并迁移旧版本保存的数据。"""
+    curve = getattr(obj, "cmg_source_curve", None)
+    if curve is not None and curve.type == "CURVE":
+        return curve
+
+    stored = read_props(obj)
+    source_name = stored.get("source_curve_name", "")
+    if source_name:
+        curve = context.scene.objects.get(source_name)
+        if curve is not None and curve.type == "CURVE":
+            obj.cmg_source_curve = curve
+            return curve
+
+    # 兼容旧版本生成的物体：只有场景中来源唯一时才安全迁移。
+    curves = [candidate for candidate in context.scene.objects if candidate.type == "CURVE"]
+    if len(curves) == 1:
+        obj.cmg_source_curve = curves[0]
+        return curves[0]
+    return None
 
 
 # 面板属性键与默认值，用于将存储值同步回面板。
@@ -460,6 +487,7 @@ class MESH_OT_cmg_generate(bpy.types.Operator):
             )
 
         obj = _assign_object(context, mesh, name)
+        obj.cmg_source_curve = curve
 
         if props.bevel_enabled and props.bevel_width > 0.0:
             bevel = obj.modifiers.new("cmg_bevel", "BEVEL")
@@ -469,6 +497,7 @@ class MESH_OT_cmg_generate(bpy.types.Operator):
 
         store_props(obj, {
             "gen_type": props.gen_type,
+            "source_curve_name": curve.name,
             "pipe_radius": props.pipe_radius,
             "pipe_ring_segments": props.pipe_ring_segments,
             "pipe_length_segments": props.pipe_length_segments,
@@ -517,13 +546,9 @@ class MESH_OT_cmg_update(bpy.types.Operator):
         stored = read_props(obj)
         gen_type = stored.get("gen_type", props.gen_type)
 
-        curve = None
-        for src in context.scene.objects:
-            if src.type == "CURVE" and src != obj:
-                curve = src
-                break
+        curve = resolve_source_curve(context, obj)
         if curve is None:
-            self.report({"ERROR"}, "场景中未找到用于重建的曲线")
+            self.report({"ERROR"}, "无法确定来源曲线，请在面板中为该物体选择来源曲线")
             return {"CANCELLED"}
 
         if gen_type == CMG_TYPE_PIPE:
@@ -573,6 +598,7 @@ class MESH_OT_cmg_update(bpy.types.Operator):
 
         store_props(obj, {
             "gen_type": gen_type,
+            "source_curve_name": curve.name,
             "pipe_radius": radius if gen_type == CMG_TYPE_PIPE else stored.get("pipe_radius", 0.1),
             "pipe_ring_segments": ring if gen_type == CMG_TYPE_PIPE else stored.get("pipe_ring_segments", 12),
             "pipe_length_segments": length_segments if gen_type == CMG_TYPE_PIPE else stored.get("pipe_length_segments", 32),
@@ -622,6 +648,7 @@ class VIEW3D_PT_cmg(bpy.types.Panel):
             row = layout.row()
             row.label(text="已加载参数：", icon="MESH_DATA")
             row.label(text=obj.name)
+            layout.prop(obj, "cmg_source_curve", text="来源曲线")
         elif curve is not None:
             row = layout.row()
             row.label(text="曲线：", icon="CURVE_DATA")
@@ -692,9 +719,17 @@ def register():
     for cls in classes:
         bpy.utils.register_class(cls)
     bpy.types.Scene.cmg_props = bpy.props.PointerProperty(type=CMGProperties)
+    bpy.types.Object.cmg_source_curve = bpy.props.PointerProperty(
+        name="来源曲线",
+        description="用于生成和重建该网格的曲线对象",
+        type=bpy.types.Object,
+        poll=source_curve_poll,
+    )
 
 
 def unregister():
+    if hasattr(bpy.types.Object, "cmg_source_curve"):
+        del bpy.types.Object.cmg_source_curve
     del bpy.types.Scene.cmg_props
     for cls in reversed(classes):
         bpy.utils.unregister_class(cls)

@@ -50,9 +50,11 @@ print(f"[TEST2] Curved pipe: {verts} verts, {faces} faces")
 assert verts == (40 + 1) * 12, f"Verts {verts} != {(40+1)*12}"
 assert faces == 40 * 12, f"Faces {faces} != {40*12}"
 
-# Bounding box should span the curve extent (non-degenerate)
-bb = [pipe.matrix_world @ Vector(v) for v in pipe.bound_box]
-span = max(bb, key=lambda v: v.x).x - min(bb, key=lambda v: v.x).x
+# Bounding box should span the curve extent (non-degenerate).
+# NOTE: use all vertex positions, not bound_box (which only holds 8 extreme corner
+# combinations and can miss the true extreme vertex).
+xs = [(pipe.matrix_world @ v.co).x for v in pipe.data.vertices]
+span = max(xs) - min(xs)
 print(f"[TEST2] Bounding box X span: {span:.3f}")
 assert span > 6.0, f"Pipe not following curve (span {span})"
 

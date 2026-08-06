@@ -168,9 +168,13 @@ def _cylinder_between(p1, p2, radius, segments, radius2=None):
 
 
 def _append_swept_cylinder(all_verts, all_faces, path, radius, segments):
-    """沿折线路径扫掠开口圆柱，追加到顶点/面列表。"""
+    """沿折线路径扫掠开口圆柱，追加到顶点/面列表。
+
+    注意：调用方负责按弧长均匀重采样路径；此处不再重采样，
+    因为对已均匀的路径二次重采样会按相邻点的空间距离重新分布，
+    在曲线回折处会破坏采样点（挤掉凸出点）。
+    """
     segments = max(3, segments)
-    path = resample_points(path, max(len(path), 2))
     base = len(all_verts)
     tangents = []
     for i in range(len(path)):

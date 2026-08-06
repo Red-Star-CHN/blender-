@@ -143,10 +143,14 @@ def run_test():
     assert min(xs) > 19.0 and max(xs) < 25.0, "Second pipe rebuilt from the wrong curve"
 
     # Legacy objects without a binding must not silently use the first curve
-    # when multiple candidates exist.
+    # when multiple candidates exist. (CANCELLED + ERROR report raises RuntimeError.)
     second_pipe.cmg_source_curve = None
     del second_pipe["cmg_source_curve_name"]
-    result = bpy.ops.mesh.cmg_update()
+    try:
+        bpy.ops.mesh.cmg_update()
+        result = {"FINISHED"}
+    except RuntimeError:
+        result = {"CANCELLED"}
     assert result == {"CANCELLED"}, "Ambiguous legacy source curve should cancel update"
 
     print("[TEST] ALL TESTS PASSED")
